@@ -175,9 +175,20 @@ impl Config {
             .with_lint_config(self.lint_config.clone())
     }
 
-    #[allow(dead_code)]
+    #[cfg(not(test))]
     fn folder_path() -> Option<PathBuf> {
         dirs::config_dir().map(|path| path.join("harper-desktop"))
+    }
+
+    /// Tests that save the config (for example through the IPC server) must not
+    /// overwrite the user's real config, so they use a folder in the temporary directory.
+    #[cfg(test)]
+    fn folder_path() -> Option<PathBuf> {
+        Some(
+            std::env::temp_dir()
+                .join(format!("harper-desktop-tests-{}", std::process::id()))
+                .join("harper-desktop"),
+        )
     }
 
     #[allow(dead_code)]
