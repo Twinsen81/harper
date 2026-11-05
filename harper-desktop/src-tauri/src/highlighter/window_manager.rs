@@ -162,6 +162,11 @@ impl WindowManagerApp {
         (self.refresh_config)();
     }
 
+    /// The areas of the overlay windows, one for each monitor, in global screen points.
+    fn viewports(&self) -> Vec<egui::Rect> {
+        self.windows.iter().map(Window::viewport).collect()
+    }
+
     /// Toggles native click-through behavior based on the cursor's current interactive Harper target,
     /// keeping editor clicks from being swallowed when the pointer is outside highlights and popups.
     fn update_cursor_hittest(&mut self, event_loop: &ActiveEventLoop) {
@@ -169,7 +174,9 @@ impl WindowManagerApp {
             return;
         };
 
-        let hit_target = self.render_state.hit_target_at_pos(cursor_pos);
+        let hit_target = self
+            .render_state
+            .hit_target_at_pos(cursor_pos, &self.viewports());
 
         self.hovered_lint = match hit_target {
             HitTarget::Lint(index) => Some(index),
@@ -200,7 +207,10 @@ impl WindowManagerApp {
             return;
         };
 
-        let HitTarget::Lint(index) = self.render_state.hit_target_at_pos(cursor_pos) else {
+        let HitTarget::Lint(index) = self
+            .render_state
+            .hit_target_at_pos(cursor_pos, &self.viewports())
+        else {
             return;
         };
 
@@ -260,6 +270,7 @@ impl ApplicationHandler for WindowManagerApp {
             }
         );
         let should_render = matches!(&event, WindowEvent::RedrawRequested);
+        let viewports = self.viewports();
 
         if let Some(window) = self
             .windows
@@ -269,7 +280,7 @@ impl ApplicationHandler for WindowManagerApp {
             window.handle_event(&event);
 
             if should_render {
-                window.render(&mut self.render_state);
+                window.render(&mut self.render_state, &viewports);
             }
         }
 

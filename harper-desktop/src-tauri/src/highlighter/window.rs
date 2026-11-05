@@ -123,11 +123,32 @@ impl Window {
         }
     }
 
-    pub fn render(&mut self, render_state: &mut RenderState) {
+    /// The window's content area in global screen points.
+    ///
+    /// Accessibility rectangles and the cursor position use these coordinates. egui uses points
+    /// that start at the window's top-left corner and have the same scale. When the platform cannot
+    /// report the window position, the window is assumed to start at the origin.
+    pub fn viewport(&self) -> egui::Rect {
+        let scale_factor = self.inner.scale_factor();
+        let position = self
+            .inner
+            .inner_position()
+            .map(|position| position.to_logical::<f32>(scale_factor))
+            .unwrap_or_default();
+        let size = self.inner.inner_size().to_logical::<f32>(scale_factor);
+
+        egui::Rect::from_min_size(
+            egui::pos2(position.x, position.y),
+            egui::vec2(size.width, size.height),
+        )
+    }
+
+    /// Renders one frame. `viewports` are the areas of all overlay windows, in global screen points.
+    pub fn render(&mut self, render_state: &mut RenderState, viewports: &[egui::Rect]) {
         let context = self.egui_state.egui_ctx().clone();
         let input = self.egui_state.take_egui_input(&self.inner);
         let output = context.run_ui(input, |ui| {
-            render_state.render(ui);
+            render_state.render(ui, viewports);
         });
 
         self.egui_state

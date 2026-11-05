@@ -9,7 +9,7 @@ use harper_core::{Document, linting::LintKind};
 
 use self::{
     draw_highlight::draw_highlight,
-    popup_layout::{PopupLayout, approach},
+    popup_layout::{PopupLayout, approach, viewport_for_anchor},
     render_lint_card::{
         FIRST_ROW_OFFSET, LintCardAction, popup_layout_for_lint, render_lint_card, row_count,
         sidebar_target,
@@ -140,9 +140,12 @@ impl RenderState {
     }
 
     /// Checks if a given position touches a hit target.
-    pub fn hit_target_at_pos(&self, pos: egui::Pos2) -> HitTarget {
+    ///
+    /// `pos` and `viewports` are in global screen points. `viewports` are the areas of the overlay
+    /// windows, one for each monitor.
+    pub fn hit_target_at_pos(&self, pos: egui::Pos2, viewports: &[egui::Rect]) -> HitTarget {
         if self
-            .popup_layout()
+            .popup_layout(viewports)
             .is_some_and(|layout| layout.contains(pos))
         {
             return HitTarget::Popup;
@@ -158,23 +161,28 @@ impl RenderState {
 
     /// Computes popup hit-test bounds from our layout contract instead of waiting for egui to report
     /// rendered bounds, which keeps hit-testing available before the next render pass completes.
-    pub fn popup_layout(&self) -> Option<PopupLayout> {
-        self.highlighted_lint
-            .and_then(|index| self.lints().get(index))
-            .map(|positioned_lint| {
-                popup_layout_for_lint(
-                    &positioned_lint.rect,
-                    &positioned_lint.lint,
-                    self.current_sidebar_position,
-                )
-            })
+    ///
+    /// The popup is placed inside the viewport of the monitor that shows the lint. The layout is in
+    /// global screen points.
+    pub fn popup_layout(&self, viewports: &[egui::Rect]) -> Option<PopupLayout> {
+        let positioned_lint = self
+            .highlighted_lint
+            .and_then(|index| self.lints().get(index))?;
+        let viewport = viewport_for_anchor(&positioned_lint.rect, viewports)?;
+
+        Some(popup_layout_for_lint(
+            &positioned_lint.rect,
+            &positioned_lint.lint,
+            viewport,
+            self.current_sidebar_position,
+        ))
     }
 
     /// Draws highlights and the active popup from the same state used by hit-testing so visible
     /// regions and clickable regions do not drift apart.
     ///
     /// Each call also moves the sidebar toward its target by the time since the previous call.
-    pub fn render(&mut self, ui: &mut egui::Ui) {
+    pub fn render(&mut self, ui: &mut egui::Ui, viewports: &[egui::Rect]) {
         let now = Instant::now();
         let time_since_last_render = self
             .last_render
@@ -199,18 +207,17 @@ impl RenderState {
 
         if let Some(index) = self.highlighted_lint
             && let Some(positioned_lint) = self.lints().get(index)
+            && let Some(layout) = self.popup_layout(viewports)
         {
-            let rect = positioned_lint.rect;
             let lint = positioned_lint.lint.clone();
             let source_text = positioned_lint.source_text.clone();
 
             match render_lint_card(
                 ui,
-                &rect,
+                layout,
                 &lint,
                 &source_text,
                 self.shown_suggestion,
-                self.current_sidebar_position,
                 &mut self.markdown_cache,
             ) {
                 Some(LintCardAction::Close) => self.close_popup(),
