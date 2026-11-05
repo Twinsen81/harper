@@ -33,6 +33,27 @@ pub struct PopupLayout {
 }
 
 impl PopupLayout {
+    /// Moves both cards by `offset`.
+    pub fn translate(self, offset: egui::Vec2) -> Self {
+        Self {
+            list: self.list.translate(offset),
+            flyout: self.flyout.translate(offset),
+        }
+    }
+
+    /// Converts a popup from global screen points to the points of one overlay window.
+    ///
+    /// `popup_viewport` is the viewport that the popup was placed in, and `window_viewport` is the
+    /// window's area. Both are in global screen points. Returns `None` when the popup belongs to
+    /// another window, so only one monitor shows the popup.
+    pub fn in_window(
+        self,
+        popup_viewport: egui::Rect,
+        window_viewport: egui::Rect,
+    ) -> Option<Self> {
+        (popup_viewport == window_viewport).then(|| self.translate(-window_viewport.min.to_vec2()))
+    }
+
     /// Checks if a position is on either card.
     ///
     /// The gap between the cards is not part of the popup, so clicks there go to the editor.
@@ -276,6 +297,37 @@ mod tests {
             egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1728.0, 1117.0)),
             egui::Rect::from_min_size(egui::pos2(1728.0, 0.0), egui::vec2(2560.0, 1440.0)),
         ]
+    }
+
+    #[test]
+    fn in_window_translates_to_window_points() {
+        let [_, external] = two_monitors();
+        let anchor = Rect::new(2000.0, 100.0, 60.0, 16.0);
+        let layout = popup_layout(&anchor, external, LIST, FLYOUT, 0.0);
+        let local = layout.in_window(external, external).unwrap();
+
+        assert_eq!(
+            local.list.min,
+            egui::pos2(2000.0 - 1728.0, 116.0 + ANCHOR_GAP)
+        );
+        assert_eq!(local.list.size(), layout.list.size());
+        assert_eq!(local.flyout.left(), local.list.right() + PANEL_GAP);
+    }
+
+    #[test]
+    fn in_window_keeps_primary_monitor_points() {
+        let [built_in, _] = two_monitors();
+        let layout = popup_layout(&anchor(), built_in, LIST, FLYOUT, 0.0);
+
+        assert_eq!(layout.in_window(built_in, built_in), Some(layout));
+    }
+
+    #[test]
+    fn in_window_skips_other_monitors() {
+        let [built_in, external] = two_monitors();
+        let layout = popup_layout(&anchor(), built_in, LIST, FLYOUT, 0.0);
+
+        assert_eq!(layout.in_window(built_in, external), None);
     }
 
     #[test]

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use egui_wgpu::wgpu::PresentMode;
 use egui_wgpu::winit::Painter;
 use egui_wgpu::{RendererOptions, WgpuConfiguration, WgpuSetup};
-use winit::dpi::{PhysicalPosition, PhysicalSize};
+use winit::dpi::{Position, Size};
 use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::monitor::MonitorHandle;
@@ -29,11 +29,35 @@ pub struct Window {
     viewport_id: egui::ViewportId,
 }
 
+/// Returns the monitor's position and size in the units that place a window exactly on it.
+///
+/// On macOS, these are logical points, the unit of the global screen coordinates. winit on macOS
+/// converts physical values with the scale factor of the main screen when it creates a window, and
+/// with the window's scale factor later. Neither is always this monitor's scale factor, so physical
+/// values can put the window on the wrong monitor when the monitors have different scale factors.
+#[cfg(target_os = "macos")]
+fn monitor_bounds(monitor: &MonitorHandle) -> (Position, Size) {
+    let scale_factor = monitor.scale_factor();
+
+    (
+        Position::Logical(monitor.position().to_logical(scale_factor)),
+        Size::Logical(monitor.size().to_logical(scale_factor)),
+    )
+}
+
+/// Returns the monitor's position and size in the units that place a window exactly on it.
+#[cfg(not(target_os = "macos"))]
+fn monitor_bounds(monitor: &MonitorHandle) -> (Position, Size) {
+    (
+        Position::Physical(monitor.position()),
+        Size::Physical(monitor.size()),
+    )
+}
+
 impl Window {
     pub async fn new(event_loop: &ActiveEventLoop, monitor: MonitorHandle) -> Result<Self, Error> {
         let context = egui::Context::default();
-        let position = monitor.position();
-        let size = monitor.size();
+        let (position, size) = monitor_bounds(&monitor);
         let window = Arc::new(
             event_loop.create_window(
                 WinitWindow::default_attributes()
@@ -49,8 +73,8 @@ impl Window {
             )?,
         );
 
-        window.set_outer_position(PhysicalPosition::new(position.x, position.y));
-        let _ = window.request_inner_size(PhysicalSize::new(size.width, size.height));
+        window.set_outer_position(position);
+        let _ = window.request_inner_size(size);
         window.set_cursor_hittest(false)?;
         let viewport_id = egui::ViewportId::from_hash_of(window.id());
 
@@ -145,10 +169,11 @@ impl Window {
 
     /// Renders one frame. `viewports` are the areas of all overlay windows, in global screen points.
     pub fn render(&mut self, render_state: &mut RenderState, viewports: &[egui::Rect]) {
+        let viewport = self.viewport();
         let context = self.egui_state.egui_ctx().clone();
         let input = self.egui_state.take_egui_input(&self.inner);
         let output = context.run_ui(input, |ui| {
-            render_state.render(ui, viewports);
+            render_state.render(ui, viewport, viewports);
         });
 
         self.egui_state
