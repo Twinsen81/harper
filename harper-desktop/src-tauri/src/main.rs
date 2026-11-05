@@ -13,6 +13,7 @@ use crate::args::{Args, Command};
 use crate::communication::{Client, ProtocolError};
 use crate::config::{Config, Integration, LlmSettings};
 use crate::debounce::{DebounceState, DebounceStatus};
+use crate::llm_worker::{LlmWorker, merge_llm_lints};
 use clap::Parser;
 use harper_core::{
     Dialect, DictWordMetadata, Document, IgnoredLints,
@@ -48,6 +49,7 @@ mod desktop_updater;
 pub mod highlighter;
 pub mod highlighter_service;
 pub mod lint_kind_color;
+mod llm_worker;
 mod os_broker;
 pub mod rect;
 
@@ -277,6 +279,7 @@ pub fn run_highlighter(has_parent: bool) {
     }));
     let debounce_ms = Rc::new(RefCell::new(startup_config.debounce_ms));
     let llm_settings = Rc::new(RefCell::new(startup_config.llm));
+    let llm_worker = Rc::new(RefCell::new(LlmWorker::new()));
     let linter = Rc::new(RefCell::new(startup_linter));
 
     let integration_client = client.clone();
@@ -305,10 +308,14 @@ pub fn run_highlighter(has_parent: bool) {
     let lint_user_dictionary = user_dictionary.clone();
     let lint_debounce_ms = debounce_ms.clone();
     let lint_debounce_state = Rc::new(RefCell::new(DebounceState::default()));
+    let lint_dialect = dialect.clone();
+    let lint_llm_settings = llm_settings.clone();
+    let lint_llm_worker = llm_worker.clone();
 
     let ignore_client = client.clone();
     let ignore_runtime = sync_runtime.clone();
     let ignore_ignored_lints = ignored_lints.clone();
+    let ignore_llm_worker = llm_worker.clone();
 
     let dictionary_client = client.clone();
     let dictionary_runtime = sync_runtime.clone();
@@ -320,6 +327,7 @@ pub fn run_highlighter(has_parent: bool) {
     let disable_client = client.clone();
     let disable_runtime = sync_runtime.clone();
     let disable_linter = linter.clone();
+    let disable_llm_settings = llm_settings.clone();
 
     let settings_client = client.clone();
     let settings_runtime = sync_runtime.clone();
@@ -333,26 +341,45 @@ pub fn run_highlighter(has_parent: bool) {
     let refresh_debounce_ms = debounce_ms.clone();
     let refresh_llm_settings = llm_settings.clone();
     let refresh_linter = linter.clone();
+    let refresh_llm_worker = llm_worker.clone();
 
     let lint_text = move |text: &str| {
+        let make_document = || {
+            let dictionary =
+                Config::dictionary_from_user_dictionary(lint_user_dictionary.borrow().clone());
+            Document::new_markdown_default(text, &dictionary)
+        };
+
         let debounce_ms = *lint_debounce_ms.borrow();
-        let mut debounce_state = lint_debounce_state.borrow_mut();
+        let mut organized_lints = {
+            let mut debounce_state = lint_debounce_state.borrow_mut();
 
-        match debounce_state.status(text, debounce_ms) {
-            DebounceStatus::Cached(lints) => return lints,
-            DebounceStatus::Ready => {}
-        }
+            match debounce_state.status(text, debounce_ms) {
+                DebounceStatus::Cached(lints) => lints,
+                DebounceStatus::Ready => {
+                    let doc = make_document();
+                    let mut organized_lints = lint_linter.borrow_mut().organized_lints(&doc);
 
-        let dictionary =
-            Config::dictionary_from_user_dictionary(lint_user_dictionary.borrow().clone());
-        let doc = Document::new_markdown_default(text, &dictionary);
-        let mut organized_lints = lint_linter.borrow_mut().organized_lints(&doc);
+                    for lints in organized_lints.values_mut() {
+                        lint_ignored_lints.borrow().remove_ignored(lints, &doc);
+                    }
 
-        for lints in organized_lints.values_mut() {
-            lint_ignored_lints.borrow().remove_ignored(lints, &doc);
-        }
+                    debounce_state.store_lints(text, debounce_ms, &organized_lints);
+                    organized_lints
+                }
+            }
+        };
 
-        debounce_state.store_lints(text, debounce_ms, &organized_lints);
+        // PROTOTYPE: the LLM lints are added after the debounce step, so they never wait
+        // for Harper's debounce delay and are never stored in the debounce cache.
+        let llm_lints = lint_llm_worker.borrow_mut().lints(
+            &lint_llm_settings.borrow(),
+            *lint_dialect.borrow(),
+            text,
+            &lint_ignored_lints.borrow(),
+            make_document,
+        );
+        merge_llm_lints(&mut organized_lints, llm_lints);
 
         organized_lints
     };
@@ -363,6 +390,7 @@ pub fn run_highlighter(has_parent: bool) {
                 .borrow_mut()
                 .ignore_lint(lint, document);
         }
+        ignore_llm_worker.borrow_mut().invalidate();
 
         let snapshot = ignore_ignored_lints.borrow().clone();
         if let Err(error) = ignore_runtime.block_on(
@@ -407,14 +435,30 @@ pub fn run_highlighter(has_parent: bool) {
         }
     };
 
-    let disable_rule = move |rule_name: &str| match disable_runtime.block_on(
-        disable_client
-            .lock()
-            .expect("IPC client lock poisoned")
-            .disable_rule(rule_name),
-    ) {
-        Ok(config) => disable_linter.borrow_mut().config = config,
-        Err(error) => eprintln!("failed to disable rule {rule_name}: {error}"),
+    let disable_rule = move |rule_name: &str| {
+        // PROTOTYPE: "Turn off AI check" in the popup of an LLM lint.
+        if rule_name == harper_llm::LLM_ORIGIN_TAG {
+            disable_llm_settings.borrow_mut().check.enabled = false;
+            if let Err(error) = disable_runtime.block_on(
+                disable_client
+                    .lock()
+                    .expect("IPC client lock poisoned")
+                    .set_llm_enabled(false),
+            ) {
+                eprintln!("failed to turn off the LLM check: {error}");
+            }
+            return;
+        }
+
+        match disable_runtime.block_on(
+            disable_client
+                .lock()
+                .expect("IPC client lock poisoned")
+                .disable_rule(rule_name),
+        ) {
+            Ok(config) => disable_linter.borrow_mut().config = config,
+            Err(error) => eprintln!("failed to disable rule {rule_name}: {error}"),
+        }
     };
 
     let open_settings = move || {
@@ -442,16 +486,20 @@ pub fn run_highlighter(has_parent: bool) {
             &mut refresh_client.lock().expect("IPC client lock poisoned"),
             &refresh_runtime,
         ) {
-            Ok(config) => apply_highlighter_config(
-                config,
-                &refresh_ignored_lints,
-                &refresh_user_dictionary,
-                &refresh_dialect,
-                &refresh_integrations,
-                &refresh_debounce_ms,
-                &refresh_llm_settings,
-                &refresh_linter,
-            ),
+            Ok(config) => {
+                // The ignored lints may have changed in the settings window.
+                refresh_llm_worker.borrow_mut().invalidate();
+                apply_highlighter_config(
+                    config,
+                    &refresh_ignored_lints,
+                    &refresh_user_dictionary,
+                    &refresh_dialect,
+                    &refresh_integrations,
+                    &refresh_debounce_ms,
+                    &refresh_llm_settings,
+                    &refresh_linter,
+                )
+            }
             Err(error) => {
                 eprintln!("failed to refresh highlighter config: {error}");
                 std::process::exit(1);

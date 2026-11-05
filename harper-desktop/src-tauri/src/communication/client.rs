@@ -148,6 +148,11 @@ where
         .await
     }
 
+    pub async fn set_llm_enabled(&mut self, enabled: bool) -> Result<(), ProtocolError> {
+        self.send_ack_request(Request::SetLlmEnabled { enabled })
+            .await
+    }
+
     pub async fn disable_rule(&mut self, rule_name: &str) -> Result<FlatConfig, ProtocolError> {
         let mut config = self.get_lint_config().await?;
         config.set_rule_enabled(rule_name, false);

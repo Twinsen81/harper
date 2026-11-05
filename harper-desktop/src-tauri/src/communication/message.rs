@@ -16,6 +16,7 @@ pub enum Request {
     GetAutoEnableNewApps,
     ResolveIntegration { bundle_id: String },
     SetLintConfig { config: FlatConfig },
+    SetLlmEnabled { enabled: bool },
     IgnoreLint { ignored_lints: IgnoredLints },
     AddToDictionary { word: String },
     AddIntegration { bundle_id: String },
@@ -230,6 +231,14 @@ mod tests {
         assert!(
             matches!(decoded, Response::GetLlmSettings { settings: decoded } if decoded == settings)
         );
+    }
+
+    #[test]
+    fn set_llm_enabled_request_serializes_as_json() {
+        let encoded = serde_json::to_string(&Request::SetLlmEnabled { enabled: false }).unwrap();
+        let decoded: Request = serde_json::from_str(&encoded).unwrap();
+
+        assert!(matches!(decoded, Request::SetLlmEnabled { enabled: false }));
     }
 
     #[test]

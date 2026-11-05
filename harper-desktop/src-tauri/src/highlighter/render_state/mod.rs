@@ -203,11 +203,13 @@ impl RenderState {
             let rect = positioned_lint.rect;
             let lint = positioned_lint.lint.clone();
             let source_text = positioned_lint.source_text.clone();
+            let is_llm_lint = positioned_lint.rule_name == harper_llm::LLM_ORIGIN_TAG;
 
             match render_lint_card(
                 ui,
                 &rect,
                 &lint,
+                is_llm_lint,
                 &source_text,
                 self.shown_suggestion,
                 self.current_sidebar_position,

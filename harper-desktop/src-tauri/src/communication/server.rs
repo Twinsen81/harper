@@ -98,6 +98,16 @@ where
 
                 Response::Ack
             }
+            Request::SetLlmEnabled { enabled } => {
+                let mut config = self.config.lock().await;
+                config.llm.check.enabled = *enabled;
+
+                if let Err(error) = config.save_to_system().await {
+                    eprintln!("failed to save config: {error}");
+                }
+
+                Response::Ack
+            }
             Request::IgnoreLint { ignored_lints } => {
                 let mut config = self.config.lock().await;
                 config.ignored_lints.append(ignored_lints.clone());

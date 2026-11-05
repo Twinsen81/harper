@@ -7,6 +7,7 @@
 
 use std::collections::HashSet;
 use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -83,6 +84,8 @@ pub struct LlmChecker {
     pending: Arc<Mutex<HashSet<CacheKey>>>,
     /// A local model usually handles one request at a time, so we send them one by one.
     request_slot: Arc<Semaphore>,
+    /// Increases each time new outcomes are stored in the cache.
+    generation: Arc<AtomicU64>,
 }
 
 impl Default for LlmChecker {
@@ -94,11 +97,18 @@ impl Default for LlmChecker {
             ))),
             pending: Default::default(),
             request_slot: Arc::new(Semaphore::new(1)),
+            generation: Default::default(),
         }
     }
 }
 
 impl LlmChecker {
+    /// A number that increases each time [`Self::check_batch`] stores new outcomes.
+    /// Callers can keep the result of [`Self::lookup`] until this number changes.
+    pub fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
+    }
+
     /// Gets the cached lints for `document` and the sentences that are not checked yet.
     /// This function does not send requests.
     pub fn lookup(&self, config: &LlmConfig, dialect: Dialect, document: &Document) -> Lookup {
@@ -158,6 +168,7 @@ impl LlmChecker {
         for (key, outcome) in keys.into_iter().zip(outcomes) {
             cache.put(key, Arc::new(outcome));
         }
+        self.generation.fetch_add(1, Ordering::Release);
 
         Ok(())
     }
@@ -561,6 +572,7 @@ mod tests {
         assert!(before.lints.is_empty());
         assert_eq!(before.missing.len(), 2);
 
+        assert_eq!(checker.generation(), 0);
         let claimed = checker.claim(&config, Dialect::American, before.missing);
         for batch in batches(&config, claimed) {
             checker
@@ -571,6 +583,7 @@ mod tests {
 
         let after = checker.lookup(&config, Dialect::American, &document);
         let chars: Vec<char> = source.chars().collect();
+        assert_eq!(checker.generation(), 1);
         assert!(after.missing.is_empty());
         assert_eq!(after.lints.len(), 1);
         assert_eq!(after.lints[0].span.get_content_string(&chars), "go");
@@ -602,5 +615,6 @@ mod tests {
         );
         assert!(checker.pending.lock().unwrap().is_empty());
         assert!(checker.cache.lock().unwrap().is_empty());
+        assert_eq!(checker.generation(), 0);
     }
 }

@@ -81,10 +81,13 @@ enum ButtonContent<'a> {
 ///
 /// `sidebar_position` is the flyout card's current offset from the list card's top. The caller
 /// animates it toward [`sidebar_target`]. `shown_suggestion` only selects the highlighted row.
+// PROTOTYPE: `is_llm_lint` is the eighth argument.
+#[allow(clippy::too_many_arguments)]
 pub fn render_lint_card(
     ui: &mut egui::Ui,
     rect: &Rect,
     lint: &Lint,
+    is_llm_lint: bool,
     source_text: &str,
     shown_suggestion: Option<usize>,
     sidebar_position: f32,
@@ -113,7 +116,7 @@ pub fn render_lint_card(
         layout.flyout,
         |ui| {
             let mut action = None;
-            render_flyout(ui, lint, markdown_cache, &mut action);
+            render_flyout(ui, lint, is_llm_lint, markdown_cache, &mut action);
             action
         },
     );
@@ -372,10 +375,11 @@ fn render_list_footer(ui: &mut egui::Ui, action: &mut Option<LintCardAction>) {
 fn render_flyout(
     ui: &mut egui::Ui,
     lint: &Lint,
+    is_llm_lint: bool,
     markdown_cache: &mut CommonMarkCache,
     action: &mut Option<LintCardAction>,
 ) {
-    render_kind_header(ui, lint.lint_kind);
+    render_kind_header(ui, lint.lint_kind, is_llm_lint);
 
     egui::Frame::new()
         .inner_margin(egui::Margin::symmetric(10, 8))
@@ -421,13 +425,14 @@ fn render_flyout(
             });
         });
 
-    if disable_rule_row(ui).clicked() {
+    if disable_rule_row(ui, is_llm_lint).clicked() {
         *action = Some(LintCardAction::DisableRule);
     }
 }
 
 /// Renders the lint kind above the explanation, underlined in the lint color.
-fn render_kind_header(ui: &mut egui::Ui, lint_kind: LintKind) {
+/// PROTOTYPE: lints of the local LLM check are labeled "AI".
+fn render_kind_header(ui: &mut egui::Ui, lint_kind: LintKind, is_llm_lint: bool) {
     const BORDER_HEIGHT: f32 = 2.0;
 
     let (rect, _) = ui.allocate_exact_size(
@@ -435,7 +440,12 @@ fn render_kind_header(ui: &mut egui::Ui, lint_kind: LintKind) {
         egui::Sense::hover(),
     );
     let border_top = rect.bottom() - BORDER_HEIGHT;
-    let label = single_line_galley(ui, &lint_kind.to_string(), 12.0, FLYOUT_WIDTH - 20.0);
+    let text = if is_llm_lint {
+        format!("AI · {lint_kind}")
+    } else {
+        lint_kind.to_string()
+    };
+    let label = single_line_galley(ui, &text, 12.0, FLYOUT_WIDTH - 20.0);
 
     paint_text(
         ui.painter(),
@@ -452,7 +462,8 @@ fn render_kind_header(ui: &mut egui::Ui, lint_kind: LintKind) {
 }
 
 /// Renders the full-width row that disables the rule that produced the lint.
-fn disable_rule_row(ui: &mut egui::Ui) -> egui::Response {
+/// PROTOTYPE: for a lint of the local LLM check, the row turns off the whole check.
+fn disable_rule_row(ui: &mut egui::Ui, is_llm_lint: bool) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(
         egui::vec2(FLYOUT_WIDTH, DISABLE_ROW_HEIGHT),
         egui::Sense::click(),
@@ -480,7 +491,18 @@ fn disable_rule_row(ui: &mut egui::Ui) -> egui::Response {
     } else {
         SUBTLE_TEXT_COLOR
     };
-    let label = single_line_galley(ui, "Disable this rule", 11.0, FLYOUT_WIDTH - 20.0);
+    let (text, hover) = if is_llm_lint {
+        (
+            "Turn off AI check",
+            "Turn off the local LLM check. You can turn it on again in Settings",
+        )
+    } else {
+        (
+            "Disable this rule",
+            "Disable the rule that produced this lint",
+        )
+    };
+    let label = single_line_galley(ui, text, 11.0, FLYOUT_WIDTH - 20.0);
     paint_text(
         ui.painter(),
         rect.left() + 10.0,
@@ -491,7 +513,7 @@ fn disable_rule_row(ui: &mut egui::Ui) -> egui::Response {
 
     hover_text(
         response.on_hover_cursor(egui::CursorIcon::PointingHand),
-        "Disable the rule that produced this lint",
+        hover,
     )
 }
 
