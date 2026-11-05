@@ -47,6 +47,10 @@ pub struct RenderState {
     /// The flyout card's drawn offset from the list card's top, in points.
     current_sidebar_position: f32,
 
+    /// The flyout card's drawn height in the previous frame, or `None` before the first frame
+    /// of the visible popup.
+    flyout_height: Option<f32>,
+
     /// When `render` last ran, used to move the sidebar at a speed that follows real time.
     last_render: Option<Instant>,
 
@@ -81,6 +85,7 @@ impl RenderState {
             highlighted_lint: None,
             shown_suggestion: None,
             current_sidebar_position: FIRST_ROW_OFFSET,
+            flyout_height: None,
             last_render: None,
             markdown_cache: CommonMarkCache::default(),
             ignore_lint,
@@ -130,6 +135,7 @@ impl RenderState {
         self.highlighted_lint = highlighted_lint.filter(|index| *index < self.lints().len());
         self.shown_suggestion = None;
         self.current_sidebar_position = FIRST_ROW_OFFSET;
+        self.flyout_height = None;
     }
 
     /// Centralizes the close behavior so the popup close button only has to clear the selected lint.
@@ -137,6 +143,7 @@ impl RenderState {
         self.highlighted_lint = None;
         self.shown_suggestion = None;
         self.current_sidebar_position = FIRST_ROW_OFFSET;
+        self.flyout_height = None;
     }
 
     /// Checks if a given position touches a hit target.
@@ -182,6 +189,7 @@ impl RenderState {
                 &positioned_lint.lint,
                 viewport,
                 self.current_sidebar_position,
+                self.flyout_height,
             ),
         ))
     }
@@ -228,7 +236,7 @@ impl RenderState {
             let source_text = positioned_lint.source_text.clone();
             let is_llm_lint = positioned_lint.rule_name == harper_llm::LLM_ORIGIN_TAG;
 
-            match render_lint_card(
+            let (action, flyout_height) = render_lint_card(
                 ui,
                 layout,
                 &lint,
@@ -236,7 +244,10 @@ impl RenderState {
                 &source_text,
                 self.shown_suggestion,
                 &mut self.markdown_cache,
-            ) {
+            );
+            self.flyout_height = Some(flyout_height);
+
+            match action {
                 Some(LintCardAction::Close) => self.close_popup(),
                 Some(LintCardAction::OpenSettings) => {
                     (self.open_settings)();

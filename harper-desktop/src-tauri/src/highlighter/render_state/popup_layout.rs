@@ -131,10 +131,19 @@ pub fn popup_layout(
     let flyout_top = if stacked {
         top + list.y + PANEL_GAP
     } else {
+        // When the list opens above the anchor, the flyout must not reach below the list:
+        // it would cover the line with the anchor. A flyout that is taller than the list then
+        // grows upward from the list's bottom edge.
+        let lowest_bottom = if flipped {
+            (top + list.y).min(viewport.max.y - margin)
+        } else {
+            viewport.max.y - margin
+        };
+
         clamp(
             top + sidebar_offset,
             viewport.min.y + margin,
-            viewport.max.y - flyout.y - margin,
+            lowest_bottom - flyout.y,
         )
     };
 
@@ -412,6 +421,19 @@ mod tests {
         assert_eq!(layout.list.bottom(), 1050.0 - ANCHOR_GAP);
         assert!(built_in.contains_rect(layout.list));
         assert!(built_in.contains_rect(layout.flyout));
+        assert!(layout.flyout.bottom() <= layout.list.bottom());
+    }
+
+    #[test]
+    fn short_flyout_of_a_flipped_popup_follows_the_hovered_row() {
+        let [built_in, _] = two_monitors();
+        let anchor = Rect::new(400.0, 1050.0, 60.0, 16.0);
+        let tall_list = egui::vec2(212.0, 300.0);
+        let short_flyout = egui::vec2(192.0, 80.0);
+
+        let layout = popup_layout(&anchor, built_in, tall_list, short_flyout, 40.0);
+
+        assert_eq!(layout.flyout.top(), layout.list.top() + 40.0);
     }
 
     #[test]
