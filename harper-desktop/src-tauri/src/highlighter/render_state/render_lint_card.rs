@@ -81,6 +81,9 @@ enum ButtonContent<'a> {
 /// measuring the popup.
 ///
 /// `shown_suggestion` only selects the highlighted row.
+///
+/// Also returns the flyout card's drawn height. The caller passes it to the next
+/// [`popup_layout_for_lint`], so the layout places the card with its real height.
 pub fn render_lint_card(
     ui: &mut egui::Ui,
     layout: PopupLayout,
@@ -88,11 +91,11 @@ pub fn render_lint_card(
     source_text: &str,
     shown_suggestion: Option<usize>,
     markdown_cache: &mut CommonMarkCache,
-) -> Option<LintCardAction> {
+) -> (Option<LintCardAction>, f32) {
     let problem_text = problem_text(lint, source_text);
     let span = (lint.span.start, lint.span.end);
 
-    let list_action = show_card(ui.ctx(), "harper-lint-card-list", span, layout.list, |ui| {
+    let (list_action, _) = show_card(ui.ctx(), "harper-lint-card-list", span, layout.list, |ui| {
         let mut action = None;
         render_suggestion_list(
             ui,
@@ -104,7 +107,7 @@ pub fn render_lint_card(
         action
     });
 
-    let flyout_action = show_card(
+    let (flyout_action, flyout_height) = show_card(
         ui.ctx(),
         "harper-lint-card-flyout",
         span,
@@ -116,7 +119,7 @@ pub fn render_lint_card(
         },
     );
 
-    list_action.or(flyout_action)
+    (list_action.or(flyout_action), flyout_height)
 }
 
 /// Renders one floating card at `rect.min`, with content that scrolls when it is taller than
@@ -127,14 +130,16 @@ pub fn render_lint_card(
 ///
 /// The card is not constrained to the window. egui would otherwise move a card that does not fit
 /// into the window, and the drawn card would then not be where hit-testing expects it.
+///
+/// Returns the result of `add_contents` and the card's drawn height.
 fn show_card<R>(
     ctx: &egui::Context,
     name: &'static str,
     id_salt: impl Hash,
     rect: egui::Rect,
     add_contents: impl FnOnce(&mut egui::Ui) -> R,
-) -> R {
-    egui::Area::new(egui::Id::new(name))
+) -> (R, f32) {
+    let response = egui::Area::new(egui::Id::new(name))
         .order(egui::Order::Foreground)
         .fixed_pos(rect.min)
         .constrain(false)
@@ -154,8 +159,9 @@ fn show_card<R>(
                         .inner
                 })
                 .inner
-        })
-        .inner
+        });
+
+    (response.inner, response.response.rect.height())
 }
 
 /// The background, border, rounded corners, and shadow shared by both popup cards and tooltips,
@@ -757,17 +763,25 @@ fn problem_text(lint: &Lint, source_text: &str) -> String {
 /// `sidebar_position` is the flyout card's current offset from the list card's top, not its target,
 /// so hit-testing follows the card while it moves. The caller animates it toward
 /// [`sidebar_target`].
+///
+/// `flyout_height` is the flyout card's drawn height from the previous frame, or `None` before the
+/// first frame. The card's height depends on the lint message, so it is not known in advance.
+/// Before the first frame, the layout uses the maximum height.
 pub fn popup_layout_for_lint(
     rect: &Rect,
     lint: &Lint,
     viewport: egui::Rect,
     sidebar_position: f32,
+    flyout_height: Option<f32>,
 ) -> PopupLayout {
     popup_layout(
         rect,
         viewport,
         egui::vec2(LIST_CARD_WIDTH, list_card_height(row_count(lint))),
-        egui::vec2(FLYOUT_CARD_WIDTH, CARD_HEIGHT),
+        egui::vec2(
+            FLYOUT_CARD_WIDTH,
+            flyout_height.map_or(CARD_HEIGHT, |height| height.min(CARD_HEIGHT)),
+        ),
         sidebar_position,
     )
 }
@@ -812,6 +826,44 @@ fn brightness(color: egui::Color32, factor: f32) -> egui::Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn flyout_near_monitor_bottom_stays_next_to_the_list() {
+        let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1728.0, 1117.0));
+        // A word in Slack's message field, near the bottom of the MacBook screen.
+        let anchor = Rect::new(300.0, 1060.0, 30.0, 20.0);
+        let lint = Lint {
+            suggestions: vec![Suggestion::ReplaceWith("went".chars().collect())],
+            ..Lint::default()
+        };
+
+        let layout = popup_layout_for_lint(&anchor, &lint, viewport, FIRST_ROW_OFFSET, Some(290.0));
+
+        assert!(
+            layout.list.bottom() <= 1060.0,
+            "the list opens above the word"
+        );
+        // The flyout is taller than the list, so it grows upward from the list's bottom edge
+        // and does not cover the line with the word.
+        assert_eq!(layout.flyout.bottom(), layout.list.bottom());
+        assert_eq!(layout.flyout.height(), 290.0);
+    }
+
+    #[test]
+    fn flyout_height_is_capped_at_the_card_height() {
+        let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1728.0, 1117.0));
+        let anchor = Rect::new(300.0, 100.0, 30.0, 20.0);
+
+        let layout = popup_layout_for_lint(
+            &anchor,
+            &Lint::default(),
+            viewport,
+            FIRST_ROW_OFFSET,
+            Some(900.0),
+        );
+
+        assert_eq!(layout.flyout.height(), CARD_HEIGHT);
+    }
 
     #[test]
     fn list_card_height_counts_rows_and_footer() {
