@@ -1,3 +1,5 @@
+> **This is an unofficial fork** with an optional grammar check by a local LLM. See [LLM_FORK.md](LLM_FORK.md). Everything below is Harper's own README.
+
 <div id="header" align="center">
     <img src="logo.svg" width="400px" />
     <h1>Harper</h1>

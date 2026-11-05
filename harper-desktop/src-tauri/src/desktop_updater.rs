@@ -16,6 +16,11 @@ const DAY_MS: u64 = 24 * 60 * 60 * 1000;
 const POLL_INTERVAL: Duration = Duration::from_secs(60);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// LLM fork: an official update would replace this build and remove the LLM check, so this
+/// build never installs updates. Users update with `git pull` and `scripts/install-llm-harper.sh`.
+const UPDATES_DISABLED: bool = true;
+const UPDATES_DISABLED_MESSAGE: &str = "Updates are turned off in this build (Harper with a local LLM). To update, run `git pull` and `scripts/install-llm-harper.sh` in the repository.";
+
 /// Outcome of an attempted update, using the settings UI's existing status names.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -102,6 +107,16 @@ impl DesktopUpdater {
         app: &AppHandle<R>,
         automatic: bool,
     ) -> Option<UpdateResult> {
+        if UPDATES_DISABLED {
+            return (!automatic).then(|| UpdateResult {
+                status: UpdateStatus::Error,
+                current_version: Some(Self::current_version(app)),
+                latest_version: None,
+                message: UPDATES_DISABLED_MESSAGE.to_owned(),
+                error: None,
+            });
+        }
+
         self.run_update(|installed_update| async move {
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)

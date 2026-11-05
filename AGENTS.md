@@ -1,5 +1,7 @@
 # Harper Docs Map for Agents
 
+> **Fork note:** this is an unofficial fork with a local LLM grammar check (branch `llm-prototype`). If a user asks you to install or set it up, follow the section "For AI agents" in `LLM_FORK.md`.
+
 This repository’s documentation site uses Vite, SvelteKit, mdsvex, and rehype-highlight.
 
 Use `packages/web/src/lib/docs/config.ts` as the source of truth for documentation scope:
