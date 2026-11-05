@@ -165,24 +165,36 @@ impl RenderState {
     /// The popup is placed inside the viewport of the monitor that shows the lint. The layout is in
     /// global screen points.
     pub fn popup_layout(&self, viewports: &[egui::Rect]) -> Option<PopupLayout> {
+        self.popup_placement(viewports).map(|(_, layout)| layout)
+    }
+
+    /// Returns the viewport that shows the popup, and the popup layout in global screen points.
+    fn popup_placement(&self, viewports: &[egui::Rect]) -> Option<(egui::Rect, PopupLayout)> {
         let positioned_lint = self
             .highlighted_lint
             .and_then(|index| self.lints().get(index))?;
         let viewport = viewport_for_anchor(&positioned_lint.rect, viewports)?;
 
-        Some(popup_layout_for_lint(
-            &positioned_lint.rect,
-            &positioned_lint.lint,
+        Some((
             viewport,
-            self.current_sidebar_position,
+            popup_layout_for_lint(
+                &positioned_lint.rect,
+                &positioned_lint.lint,
+                viewport,
+                self.current_sidebar_position,
+            ),
         ))
     }
 
     /// Draws highlights and the active popup from the same state used by hit-testing so visible
     /// regions and clickable regions do not drift apart.
     ///
+    /// Each overlay window calls this with its own `viewport`, and `viewports` has the areas of all
+    /// overlay windows, all in global screen points. A window draws only the highlights on its
+    /// monitor, and only the window of the monitor that shows the selected lint draws the popup.
+    ///
     /// Each call also moves the sidebar toward its target by the time since the previous call.
-    pub fn render(&mut self, ui: &mut egui::Ui, viewports: &[egui::Rect]) {
+    pub fn render(&mut self, ui: &mut egui::Ui, viewport: egui::Rect, viewports: &[egui::Rect]) {
         let now = Instant::now();
         let time_since_last_render = self
             .last_render
@@ -202,12 +214,15 @@ impl RenderState {
         }
 
         for positioned_lint in self.lints() {
-            draw_highlight(ui, &positioned_lint.rect, &positioned_lint.lint);
+            if let Some(bounds) = window_bounds(&positioned_lint.rect, viewport) {
+                draw_highlight(ui, bounds, &positioned_lint.lint);
+            }
         }
 
         if let Some(index) = self.highlighted_lint
             && let Some(positioned_lint) = self.lints().get(index)
-            && let Some(layout) = self.popup_layout(viewports)
+            && let Some((popup_viewport, layout)) = self.popup_placement(viewports)
+            && let Some(layout) = layout.in_window(popup_viewport, viewport)
         {
             let lint = positioned_lint.lint.clone();
             let source_text = positioned_lint.source_text.clone();
@@ -296,8 +311,90 @@ fn rect_bounds(rect: &Rect) -> egui::Rect {
     )
 }
 
+/// Converts a rectangle from global screen points to the points of the window with `viewport`.
+///
+/// Returns `None` when the rectangle is not in the window, so each monitor's window draws only
+/// what is on that monitor.
+fn window_bounds(rect: &Rect, viewport: egui::Rect) -> Option<egui::Rect> {
+    let bounds = rect_bounds(rect);
+
+    bounds
+        .intersects(viewport)
+        .then(|| bounds.translate(-viewport.min.to_vec2()))
+}
+
 fn lint_kind_color32(lint_kind: LintKind) -> egui::Color32 {
     let color = lint_kind_color(lint_kind);
 
     egui::Color32::from_rgb(color.r, color.g, color.b)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A MacBook display at the origin and an external display on its right, in global screen
+    /// points.
+    const BUILT_IN: egui::Rect =
+        egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1728.0, 1117.0));
+    const EXTERNAL: egui::Rect =
+        egui::Rect::from_min_max(egui::pos2(1728.0, 0.0), egui::pos2(4288.0, 1440.0));
+
+    #[test]
+    fn window_bounds_keeps_primary_monitor_points() {
+        let rect = Rect::new(400.0, 1050.0, 60.0, 16.0);
+
+        assert_eq!(window_bounds(&rect, BUILT_IN), Some(rect_bounds(&rect)));
+    }
+
+    #[test]
+    fn window_bounds_skips_rect_on_other_monitor() {
+        assert_eq!(
+            window_bounds(&Rect::new(400.0, 1050.0, 60.0, 16.0), EXTERNAL),
+            None
+        );
+        assert_eq!(
+            window_bounds(&Rect::new(2000.0, 100.0, 60.0, 16.0), BUILT_IN),
+            None
+        );
+    }
+
+    #[test]
+    fn window_bounds_translates_by_monitor_origin() {
+        let bounds = window_bounds(&Rect::new(2000.0, 100.0, 60.0, 16.0), EXTERNAL);
+
+        assert_eq!(
+            bounds,
+            Some(egui::Rect::from_min_size(
+                egui::pos2(272.0, 100.0),
+                egui::vec2(60.0, 16.0)
+            ))
+        );
+    }
+
+    #[test]
+    fn window_bounds_supports_negative_origins() {
+        let left =
+            egui::Rect::from_min_size(egui::pos2(-2560.0, -323.0), egui::vec2(2560.0, 1440.0));
+        let bounds = window_bounds(&Rect::new(-300.0, -100.0, 60.0, 16.0), left);
+
+        assert_eq!(
+            bounds,
+            Some(egui::Rect::from_min_size(
+                egui::pos2(2260.0, 223.0),
+                egui::vec2(60.0, 16.0)
+            ))
+        );
+    }
+
+    #[test]
+    fn window_bounds_draws_rect_across_monitors_on_both() {
+        let rect = Rect::new(1700.0, 100.0, 60.0, 16.0);
+
+        assert!(window_bounds(&rect, BUILT_IN).is_some());
+        assert_eq!(
+            window_bounds(&rect, EXTERNAL).map(|bounds| bounds.min),
+            Some(egui::pos2(-28.0, 100.0))
+        );
+    }
 }
