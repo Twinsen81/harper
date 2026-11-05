@@ -1,13 +1,15 @@
 //! Parses the model's answer.
 
 use anyhow::{Context, Result, anyhow, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use serde_json::Value;
 
 /// One changed sentence, as the model returns it.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Fix {
     /// The 1-based sentence id from the user prompt.
+    /// Some models (Qwen3.5 9B) write it as a string: `"id":"1"`.
+    #[serde(deserialize_with = "number_or_string")]
     pub id: usize,
     /// The full corrected sentence (still masked).
     pub text: String,
@@ -15,6 +17,21 @@ pub struct Fix {
     pub kind: String,
     #[serde(default)]
     pub why: String,
+}
+
+/// Reads a `usize` that is written as a JSON number or as a string with a number.
+fn number_or_string<'de, D: Deserializer<'de>>(deserializer: D) -> Result<usize, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Id {
+        Number(usize),
+        Text(String),
+    }
+
+    match Id::deserialize(deserializer)? {
+        Id::Number(number) => Ok(number),
+        Id::Text(text) => text.trim().parse().map_err(serde::de::Error::custom),
+    }
 }
 
 /// Reads the fixes from a chat completions response body.
@@ -163,6 +180,16 @@ mod tests {
 
         assert_eq!(fixes.len(), 1);
         assert_eq!(fixes[0].text, "faster than");
+    }
+
+    #[test]
+    fn parses_an_id_written_as_a_string() {
+        let fixes = parse_fixes(&completion(
+            r#"{"fixes":[{"id":"2","text":"A b.","kind":"grammar","why":"x"}]}"#,
+        ))
+        .unwrap();
+
+        assert_eq!(fixes[0].id, 2);
     }
 
     #[test]
