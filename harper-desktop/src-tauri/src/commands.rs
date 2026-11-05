@@ -1,7 +1,7 @@
 //! This module centralizes all the Rust commands to be made available to the JavaScript
 //! environment. Use [`application_message_handler`] to load them into the Tauri runtime.
 
-use crate::config::Config;
+use crate::config::{Config, LlmSettings};
 use crate::desktop_updater::{DesktopUpdater, UpdateResult};
 use crate::highlighter_service::HighlighterService;
 use crate::os_broker::{AccessibilityPermissionStatus, AppSearchResult, OsBroker};
@@ -23,6 +23,9 @@ pub fn application_message_handler<R: Runtime>() -> impl Fn(Invoke<R>) -> bool {
         get_dialect,
         get_debounce_ms,
         set_debounce_ms,
+        get_llm_settings,
+        set_llm_settings,
+        test_llm_connection,
         get_auto_update,
         set_auto_update,
         get_current_version,
@@ -83,6 +86,67 @@ async fn set_debounce_ms(
         .map_err(|error| error.to_string())?;
 
     Ok(())
+}
+
+#[tauri::command]
+async fn get_llm_settings(config: State<'_, Arc<Mutex<Config>>>) -> Result<LlmSettings, String> {
+    Ok(config.lock().await.llm.clone())
+}
+
+#[tauri::command]
+async fn set_llm_settings(
+    settings: LlmSettings,
+    config: State<'_, Arc<Mutex<Config>>>,
+) -> Result<(), String> {
+    let mut config = config.lock().await;
+    let previous = std::mem::replace(&mut config.llm, settings);
+
+    if let Err(error) = config.save_to_system().await {
+        config.llm = previous;
+        return Err(error.to_string());
+    }
+
+    Ok(())
+}
+
+/// Sends one sentence with a known error to the LLM endpoint and describes the result.
+/// The settings come from the UI, so they can be tested before they are saved.
+#[tauri::command]
+async fn test_llm_connection(
+    settings: LlmSettings,
+    config: State<'_, Arc<Mutex<Config>>>,
+) -> Result<String, String> {
+    const SENTENCE: &str = "Yesterday we go to the office and fix the build.";
+
+    let dialect = config.lock().await.dialect;
+    let checker = harper_llm::LlmChecker::default();
+    let started = std::time::Instant::now();
+    let outcomes = checker
+        .check_sentences(&settings.check, dialect, vec![SENTENCE.to_owned()])
+        .await
+        .map_err(|error| format!("{error:#}"))?;
+    let seconds = started.elapsed().as_secs_f64();
+
+    Ok(match outcomes.first() {
+        Some(harper_llm::Outcome::Fixed(fixes)) => {
+            let fixed = harper_llm::diff::apply_hunks(
+                SENTENCE,
+                &fixes
+                    .iter()
+                    .map(|fix| harper_llm::diff::Hunk {
+                        start: fix.start,
+                        end: fix.end,
+                        replacement: fix.replacement.clone(),
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            format!("The model works ({seconds:.1} s). \"{SENTENCE}\" became \"{fixed}\".")
+        }
+        Some(outcome) => format!(
+            "The model answered in {seconds:.1} s, but it did not fix the test sentence \"{SENTENCE}\" ({outcome:?}). Try another model."
+        ),
+        None => "The model gave no answer.".to_owned(),
+    })
 }
 
 #[tauri::command]

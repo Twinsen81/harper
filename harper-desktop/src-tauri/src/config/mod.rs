@@ -1,5 +1,6 @@
 mod error;
 mod integration;
+mod llm;
 
 use crate::{PlatformBroker, os_broker::OsBroker};
 pub use error::Error;
@@ -10,6 +11,7 @@ use harper_core::{
 };
 use harper_dictionary_wordlist::{load_dict, save_dict};
 pub use integration::Integration;
+pub use llm::LlmSettings;
 use serde::de::{DeserializeOwned, Error as _};
 use std::{fs, io, path::PathBuf, sync::Arc};
 
@@ -29,6 +31,8 @@ pub struct Config {
     /// Failed attempts also count toward the automatic 24-hour interval.
     pub last_update_check: Option<u64>,
     pub highlighter_service_enabled: bool,
+    /// PROTOTYPE: the local LLM check.
+    pub llm: LlmSettings,
 }
 
 impl Config {
@@ -45,6 +49,7 @@ impl Config {
             auto_update: true,
             last_update_check: None,
             highlighter_service_enabled: true,
+            llm: LlmSettings::default(),
         }
     }
 
@@ -198,6 +203,7 @@ impl Config {
             "auto_update": self.auto_update,
             "last_update_check": self.last_update_check,
             "highlighter_service_enabled": self.highlighter_service_enabled,
+            "llm": &self.llm,
         }))
     }
 
@@ -231,6 +237,7 @@ impl Config {
                 "highlighter_service_enabled",
             )?
             .unwrap_or(true),
+            llm: deserialize_optional_field(object, "llm")?.unwrap_or_default(),
         })
     }
 }
@@ -296,6 +303,7 @@ mod tests {
         assert!(serialized.contains("auto_update"));
         assert!(serialized.contains("last_update_check"));
         assert!(serialized.contains("highlighter_service_enabled"));
+        assert!(serialized.contains("\"llm\""));
     }
 
     #[test]
@@ -322,6 +330,7 @@ mod tests {
             deserialized.highlighter_service_enabled,
             config.highlighter_service_enabled
         );
+        assert_eq!(deserialized.llm, config.llm);
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&deserialized.serialize_main().unwrap())
                 .unwrap(),
@@ -368,6 +377,19 @@ mod tests {
         let deserialized = Config::deserialize_main(&value.to_string()).unwrap();
 
         assert!(deserialized.highlighter_service_enabled);
+    }
+
+    #[test]
+    fn deserialize_main_uses_default_llm_settings_when_missing() {
+        let config = Config::new();
+        let mut value =
+            serde_json::from_str::<serde_json::Value>(&config.serialize_main().unwrap()).unwrap();
+        value.as_object_mut().unwrap().remove("llm");
+
+        let deserialized = Config::deserialize_main(&value.to_string()).unwrap();
+
+        assert_eq!(deserialized.llm, super::LlmSettings::default());
+        assert!(!deserialized.llm.check.enabled);
     }
 
     #[test]

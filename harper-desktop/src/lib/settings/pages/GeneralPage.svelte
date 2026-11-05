@@ -3,6 +3,7 @@ import { Button, Checkbox, CheckIcon, Input, Select, SettingRow } from 'componen
 import type { Dialect } from 'harper.js';
 import { onMount } from 'svelte';
 import { Client } from '$lib/client';
+import LlmSettingsSection from '../components/LlmSettingsSection.svelte';
 import { DIALECT_OPTIONS } from '../settings-data';
 
 const DialectValue = {
@@ -394,4 +395,8 @@ function settingsValueToDialect(value: string): Dialect {
             <p class="result-summary">Saving debounce delay...</p>
           {/if}
         </div>
+
+        <div class="divider"></div>
+
+        <LlmSettingsSection />
       </section>

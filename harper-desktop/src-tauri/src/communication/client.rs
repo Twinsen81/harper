@@ -10,6 +10,7 @@ use tokio::{
 use super::error::ProtocolError;
 use super::framing::write_message;
 use super::message::{Request, Response};
+use crate::config::LlmSettings;
 
 /// Highlighter-side protocol endpoint for requesting state from the Tauri server over async I/O.
 pub struct Client<R, W> {
@@ -75,6 +76,15 @@ where
             Response::GetDebounceMs { debounce_ms } => Ok(debounce_ms),
             _ => Err(ProtocolError::UnexpectedResponse {
                 expected: "GetDebounceMs",
+            }),
+        }
+    }
+
+    pub async fn get_llm_settings(&mut self) -> Result<LlmSettings, ProtocolError> {
+        match self.send_request(Request::GetLlmSettings).await? {
+            Response::GetLlmSettings { settings } => Ok(settings),
+            _ => Err(ProtocolError::UnexpectedResponse {
+                expected: "GetLlmSettings",
             }),
         }
     }

@@ -34,6 +34,22 @@ function getConfigLinter(): Promise<LocalLinterType> {
 	return configLinterPromise;
 }
 
+/** PROTOTYPE: settings of the local LLM check. Mirrors `LlmSettings` in Rust. */
+export interface LlmSettings {
+	enabled: boolean;
+	endpoint: string;
+	model: string;
+	timeoutMs: number;
+	minWords: number;
+	reasoningEffort: string;
+	batchSize: number;
+	maxBatchChars: number;
+	completeSentencesOnly: boolean;
+	maxEditRatio: number;
+	structuredOutput: boolean;
+	idleMs: number;
+}
+
 export interface Integration {
 	bundle_id: string;
 	enabled: boolean;
@@ -91,6 +107,19 @@ export class Client {
 
 	static async setDebounceMs(debounceMs: number): Promise<void> {
 		await invoke('set_debounce_ms', { debounceMs });
+	}
+
+	static async getLlmSettings(): Promise<LlmSettings> {
+		return await invoke<LlmSettings>('get_llm_settings');
+	}
+
+	static async setLlmSettings(settings: LlmSettings): Promise<void> {
+		await invoke('set_llm_settings', { settings });
+	}
+
+	/** Sends a test sentence with these (maybe unsaved) settings and returns a description of the result. */
+	static async testLlmConnection(settings: LlmSettings): Promise<string> {
+		return await invoke<string>('test_llm_connection', { settings });
 	}
 
 	/** Check if the app is configured to auto update. */

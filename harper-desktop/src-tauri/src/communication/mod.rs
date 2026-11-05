@@ -93,6 +93,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn client_receives_llm_settings_from_server() {
+        let (client_request_writer, server_request_reader) = duplex(16_384);
+        let (server_response_writer, client_response_reader) = duplex(16_384);
+        let mut config = Config::new();
+        config.llm.check.enabled = true;
+        config.llm.idle_ms = 700;
+        let expected = config.llm.clone();
+        let config = Arc::new(Mutex::new(config));
+        let mut client = Client::new(client_response_reader, client_request_writer);
+        let mut server = Server::new(server_request_reader, server_response_writer, config);
+
+        let (settings, request) = tokio::join!(client.get_llm_settings(), server.receive_request());
+
+        assert_eq!(settings.unwrap(), expected);
+        assert!(matches!(request.unwrap(), Some(Request::GetLlmSettings)));
+    }
+
+    #[tokio::test]
     async fn client_receives_ignored_lints_from_server() {
         let (client_request_writer, server_request_reader) = duplex(16_384);
         let (server_response_writer, client_response_reader) = duplex(16_384);

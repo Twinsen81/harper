@@ -63,6 +63,9 @@ where
             Request::GetDebounceMs => Response::GetDebounceMs {
                 debounce_ms: self.config.lock().await.debounce_ms,
             },
+            Request::GetLlmSettings => Response::GetLlmSettings {
+                settings: self.config.lock().await.llm.clone(),
+            },
             Request::GetIgnoredLints => Response::GetIgnoredLints {
                 ignored_lints: self.config.lock().await.ignored_lints.clone(),
             },

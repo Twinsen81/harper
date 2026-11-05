@@ -11,7 +11,7 @@ use self::highlighter_service::HighlighterService;
 use self::tray::set_up_tray_menu;
 use crate::args::{Args, Command};
 use crate::communication::{Client, ProtocolError};
-use crate::config::{Config, Integration};
+use crate::config::{Config, Integration, LlmSettings};
 use crate::debounce::{DebounceState, DebounceStatus};
 use clap::Parser;
 use harper_core::{
@@ -276,6 +276,7 @@ pub fn run_highlighter(has_parent: bool) {
         auto_enable_new_apps: startup_config.auto_enable_new_apps,
     }));
     let debounce_ms = Rc::new(RefCell::new(startup_config.debounce_ms));
+    let llm_settings = Rc::new(RefCell::new(startup_config.llm));
     let linter = Rc::new(RefCell::new(startup_linter));
 
     let integration_client = client.clone();
@@ -330,6 +331,7 @@ pub fn run_highlighter(has_parent: bool) {
     let refresh_dialect = dialect.clone();
     let refresh_integrations = integrations.clone();
     let refresh_debounce_ms = debounce_ms.clone();
+    let refresh_llm_settings = llm_settings.clone();
     let refresh_linter = linter.clone();
 
     let lint_text = move |text: &str| {
@@ -391,6 +393,7 @@ pub fn run_highlighter(has_parent: bool) {
             auto_update: true,
             last_update_check: None,
             highlighter_service_enabled: true,
+            llm: LlmSettings::default(),
         };
         *dictionary_linter.borrow_mut() = config.create_linter();
 
@@ -446,6 +449,7 @@ pub fn run_highlighter(has_parent: bool) {
                 &refresh_dialect,
                 &refresh_integrations,
                 &refresh_debounce_ms,
+                &refresh_llm_settings,
                 &refresh_linter,
             ),
             Err(error) => {
@@ -522,6 +526,7 @@ fn fetch_highlighter_config(
         let integrations = client.get_integrations().await?;
         let auto_enable_new_apps = client.get_auto_enable_new_apps().await?;
         let debounce_ms = client.get_debounce_ms().await?;
+        let llm = client.get_llm_settings().await?;
 
         Ok(Config {
             dialect,
@@ -535,10 +540,13 @@ fn fetch_highlighter_config(
             auto_update: true,
             last_update_check: None,
             highlighter_service_enabled: true,
+            llm,
         })
     })
 }
 
+// PROTOTYPE: `llm_settings` is the eighth argument. Group the settings in one struct before merging.
+#[allow(clippy::too_many_arguments)]
 fn apply_highlighter_config(
     config: Config,
     ignored_lints: &Rc<RefCell<IgnoredLints>>,
@@ -546,6 +554,7 @@ fn apply_highlighter_config(
     dialect: &Rc<RefCell<Dialect>>,
     integrations: &Arc<StdMutex<IntegrationState>>,
     debounce_ms: &Rc<RefCell<u64>>,
+    llm_settings: &Rc<RefCell<LlmSettings>>,
     linter: &Rc<RefCell<LintGroup>>,
 ) {
     if config.mutable_dictionary != *user_dictionary.borrow()
@@ -567,4 +576,5 @@ fn apply_highlighter_config(
         Err(error) => eprintln!("failed to update integrations: {error}"),
     }
     *debounce_ms.borrow_mut() = config.debounce_ms;
+    *llm_settings.borrow_mut() = config.llm;
 }

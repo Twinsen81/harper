@@ -1,4 +1,4 @@
-use crate::config::Integration;
+use crate::config::{Integration, LlmSettings};
 use harper_core::{Dialect, IgnoredLints, linting::FlatConfig};
 use serde::{Deserialize, Serialize};
 
@@ -10,6 +10,7 @@ pub enum Request {
     GetDictionary,
     GetDialect,
     GetDebounceMs,
+    GetLlmSettings,
     GetIgnoredLints,
     GetIntegrations,
     GetAutoEnableNewApps,
@@ -29,6 +30,7 @@ pub enum Response {
     GetDictionary { words: Vec<String> },
     GetDialect { dialect: Dialect },
     GetDebounceMs { debounce_ms: u64 },
+    GetLlmSettings { settings: LlmSettings },
     GetIgnoredLints { ignored_lints: IgnoredLints },
     GetIntegrations { integrations: Vec<Integration> },
     GetAutoEnableNewApps { enabled: bool },
@@ -213,6 +215,21 @@ mod tests {
         let decoded: Response = serde_json::from_str(&encoded).unwrap();
 
         assert!(matches!(decoded, Response::GetDebounceMs { debounce_ms } if debounce_ms == 250));
+    }
+
+    #[test]
+    fn llm_settings_response_serializes_as_json() {
+        let mut settings = LlmSettings::default();
+        settings.check.enabled = true;
+        let response = Response::GetLlmSettings {
+            settings: settings.clone(),
+        };
+        let encoded = serde_json::to_string(&response).unwrap();
+        let decoded: Response = serde_json::from_str(&encoded).unwrap();
+
+        assert!(
+            matches!(decoded, Response::GetLlmSettings { settings: decoded } if decoded == settings)
+        );
     }
 
     #[test]
