@@ -5,6 +5,7 @@ use harper_core::linting::{Lint, LintGroup, Linter};
 use harper_core::spell::{MergedDictionary, MutableDictionary};
 use harper_core::{Document, IgnoredLints, TokenKind, remove_overlaps_map};
 use harper_core::{Lrc, Token};
+use harper_llm::LLM_ORIGIN_TAG;
 use tower_lsp_server::lsp_types::{CodeActionOrCommand, Command, Diagnostic, Range, Uri};
 
 pub struct DocumentState {
@@ -22,13 +23,22 @@ impl DocumentState {
         self.ignored_lints.ignore_lint(lint, &self.document);
     }
 
-    pub fn generate_diagnostics(&mut self, severity: DiagnosticSeverity) -> Vec<Diagnostic> {
+    /// `llm_lints` are the cached lints of the local LLM prototype (see [`harper_llm`]).
+    pub fn generate_diagnostics(
+        &mut self,
+        severity: DiagnosticSeverity,
+        llm_lints: Vec<Lint>,
+    ) -> Vec<Diagnostic> {
         let temp = self.linter.config.clone();
         self.linter.config.fill_with_curated();
 
         let mut lints = self.linter.organized_lints(&self.document);
 
         self.linter.config = temp;
+
+        if !llm_lints.is_empty() {
+            lints.insert(LLM_ORIGIN_TAG.to_owned(), llm_lints);
+        }
 
         for value in lints.values_mut() {
             self.ignored_lints.remove_ignored(value, &self.document);
@@ -50,6 +60,7 @@ impl DocumentState {
         &mut self,
         range: Range,
         code_action_config: &CodeActionConfig,
+        llm_lints: Vec<Lint>,
     ) -> Vec<CodeActionOrCommand> {
         let temp = self.linter.config.clone();
         self.linter.config.fill_with_curated();
@@ -57,6 +68,8 @@ impl DocumentState {
         let mut lints = self.linter.lint(&self.document);
 
         self.linter.config = temp;
+
+        lints.extend(llm_lints);
 
         self.ignored_lints
             .remove_ignored(&mut lints, &self.document);

@@ -8,6 +8,8 @@ use resolve_path::PathResolveExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use harper_llm::LlmConfig;
+
 #[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 #[serde(rename_all = "camelCase")]
 pub enum DiagnosticSeverity {
@@ -82,6 +84,8 @@ pub struct Config {
     /// Delay in milliseconds after typing stops before diagnostics are published.
     /// Set to 0 to publish diagnostics immediately.
     pub diagnostic_delay_ms: u64,
+    /// PROTOTYPE: grammar checks with a local LLM. Off by default.
+    pub llm: LlmConfig,
 }
 
 impl Config {
@@ -211,6 +215,10 @@ impl Config {
             base.diagnostic_delay_ms = serde_json::from_value(v.clone())?;
         }
 
+        if let Some(v) = value.get("llm") {
+            base.llm = serde_json::from_value(v.clone())?;
+        }
+
         Ok(base)
     }
 }
@@ -234,6 +242,7 @@ impl Default for Config {
             max_file_length: 120_000,
             exclude_patterns: GlobSet::empty(),
             diagnostic_delay_ms: 0,
+            llm: LlmConfig::default(),
         }
     }
 }
@@ -257,6 +266,31 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.diagnostic_delay_ms, 750);
+    }
+
+    #[test]
+    fn llm_is_disabled_by_default() {
+        assert!(!Config::default().llm.enabled);
+    }
+
+    #[test]
+    fn parses_partial_llm_config() {
+        let config = Config::from_lsp_config(
+            std::path::Path::new("."),
+            json!({
+                "harper-ls": {
+                    "llm": { "enabled": true, "model": "qwen3-8b" }
+                }
+            }),
+        )
+        .unwrap();
+
+        assert!(config.llm.enabled);
+        assert_eq!(config.llm.model, "qwen3-8b");
+        assert_eq!(
+            config.llm.endpoint,
+            "http://localhost:1234/v1/chat/completions"
+        );
     }
 
     #[test]

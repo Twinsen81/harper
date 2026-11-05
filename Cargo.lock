@@ -2815,6 +2815,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "harper-llm"
+version = "3.0.0"
+dependencies = [
+ "anyhow",
+ "harper-core",
+ "lru",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "harper-ls"
 version = "3.0.0"
 dependencies = [
@@ -2832,6 +2846,7 @@ dependencies = [
  "harper-ink",
  "harper-jjdescription",
  "harper-literate-haskell",
+ "harper-llm",
  "harper-python",
  "harper-stats",
  "harper-tex",

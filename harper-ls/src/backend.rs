@@ -25,6 +25,7 @@ use harper_html::HtmlParser;
 use harper_ink::InkParser;
 use harper_jjdescription::JJDescriptionParser;
 use harper_literate_haskell::LiterateHaskellParser;
+use harper_llm::{LlmChecker, LlmConfig, Lookup, batches};
 use harper_python::PythonParser;
 use harper_stats::{Record, Stats};
 use harper_tex::TeX;
@@ -59,6 +60,7 @@ pub struct Backend {
     stats: Arc<RwLock<Stats>>,
     doc_state: Arc<Mutex<HashMap<Uri, DocumentState>>>,
     pending_diagnostic_tasks: Arc<Mutex<HashMap<Uri, tokio::task::JoinHandle<()>>>>,
+    llm: LlmChecker,
 }
 
 impl Backend {
@@ -70,6 +72,7 @@ impl Backend {
             config: Arc::new(RwLock::new(config)),
             doc_state: Arc::new(Mutex::new(HashMap::new())),
             pending_diagnostic_tasks: Arc::new(Mutex::new(HashMap::new())),
+            llm: LlmChecker::default(),
         }
     }
 
@@ -437,21 +440,40 @@ impl Backend {
         // Copy necessary configuration to avoid holding lock.
         // `update_document` takes `doc_state` before `config`, so holding a `config` read guard
         // while waiting for `doc_state` deadlocks once a `config` writer is queued.
-        let code_action_config = self.config.read().await.code_action_config.clone();
+        let (code_action_config, llm_config, dialect) = {
+            let config = self.config.read().await;
+            (
+                config.code_action_config.clone(),
+                config.llm.clone(),
+                config.dialect,
+            )
+        };
 
         let mut doc_states = self.doc_state.lock().await;
         let Some(doc_state) = doc_states.get_mut(uri) else {
             return Ok(Vec::new());
         };
 
-        Ok(doc_state.generate_code_actions(range, &code_action_config))
+        let llm_lints = if llm_config.enabled {
+            self.llm
+                .lookup(&llm_config, dialect, &doc_state.document)
+                .lints
+        } else {
+            Vec::new()
+        };
+
+        Ok(doc_state.generate_code_actions(range, &code_action_config, llm_lints))
     }
 
     async fn generate_diagnostics(&self, uri: &Uri) -> Vec<Diagnostic> {
         // Copy necessary configuration to avoid holding lock.
-        let diagnostic_severity = {
+        let (diagnostic_severity, llm_config, dialect) = {
             let config = self.config.read().await;
-            config.diagnostic_severity
+            (
+                config.diagnostic_severity,
+                config.llm.clone(),
+                config.dialect,
+            )
         };
 
         let mut doc_states = self.doc_state.lock().await;
@@ -459,7 +481,53 @@ impl Backend {
             return Vec::new();
         };
 
-        doc_state.generate_diagnostics(diagnostic_severity)
+        let llm_lookup = if llm_config.enabled {
+            self.llm.lookup(&llm_config, dialect, &doc_state.document)
+        } else {
+            Lookup::default()
+        };
+
+        let diagnostics = doc_state.generate_diagnostics(diagnostic_severity, llm_lookup.lints);
+        drop(doc_states);
+
+        self.spawn_llm_checks(uri, llm_config, dialect, llm_lookup.missing);
+
+        diagnostics
+    }
+
+    /// PROTOTYPE: sends the unchecked sentences to the local LLM in the background,
+    /// in batches. After each answer, the diagnostics are published again, now with the
+    /// cached result.
+    fn spawn_llm_checks(
+        &self,
+        uri: &Uri,
+        llm_config: LlmConfig,
+        dialect: Dialect,
+        missing: Vec<String>,
+    ) {
+        let to_check = self.llm.claim(&llm_config, dialect, missing);
+        if to_check.is_empty() {
+            return;
+        }
+
+        let backend = self.clone();
+        let uri = uri.clone();
+
+        tokio::spawn(async move {
+            for batch in batches(&llm_config, to_check) {
+                match backend.llm.check_batch(&llm_config, dialect, batch).await {
+                    Ok(()) => backend.publish_llm_result(&uri).await,
+                    Err(err) => warn!("Local LLM check failed: {err:#}"),
+                }
+            }
+        });
+    }
+
+    /// Publishes the diagnostics again if the document is still open.
+    async fn publish_llm_result(&self, uri: &Uri) {
+        if self.doc_state.lock().await.contains_key(uri) {
+            self.publish_diagnostics(uri).await;
+        }
     }
 
     async fn publish_diagnostics(&self, uri: &Uri) {
