@@ -49,7 +49,17 @@ without debatable items) through the real pipeline:
 cargo run --release -p harper-llm --example eval -- --model google/gemma-4-26b-a4b
 ```
 
-Results on an Apple M5 Max with LM Studio (batch size 8, thinking off, no schema):
+Results on an Apple M5 Max with LM Studio (batch size 8, thinking off, no schema),
+with prompt version 3 (the model also fixes spelling):
+
+| Model | Precision | Recall | False positives | Median time per batch |
+|---|---|---|---|---|
+| Gemma 4 26B-A4B | 100% | 90.5% | 0 of 71 | 1.7 s |
+
+Harper's own rules flag 21 of the 63 errors. Harper and Gemma 4 26B-A4B together catch 93.7%.
+The result was the same in two runs.
+
+With prompt version 2 (Margin's rule "do not fix spelling"):
 
 | Model | Precision | Recall | False positives | Median time per batch |
 |---|---|---|---|---|
@@ -57,4 +67,8 @@ Results on an Apple M5 Max with LM Studio (batch size 8, thinking off, no schema
 | Qwen 3.8 27B | 95.1% | 92.1% | 1 of 71 | 7.3 s |
 | Gemma 4 E4B | 90.7% | 77.8% | 2 of 71 | 2.7 s |
 
-Harper's own rules flag 21 of the 63 errors. Harper and Gemma 4 26B-A4B together catch 92.1%.
+The `check` example sends the sentences given as arguments and prints the raw answer:
+
+```sh
+cargo run -p harper-llm --example check -- "Ystrday we go to the office and fix the build"
+```

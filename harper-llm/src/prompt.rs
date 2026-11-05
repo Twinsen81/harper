@@ -2,6 +2,11 @@
 //!
 //! The rules and the example are Margin's check prompt, version 3, JSON format
 //! (`packages/core/src/prompts/check.ts`, MIT, see `THIRD_PARTY_NOTICES.md`).
+//!
+//! One change: Margin tells the model not to fix spelling. With that rule, Gemma 4 often
+//! did not see the tense error in "Ystrday we go to the office", because it did not read
+//! "Ystrday" as "Yesterday". Now the model also fixes misspelled words. Its spelling fixes
+//! are not shown twice: integrations drop LLM lints that overlap Harper's lints.
 
 use harper_core::Dialect;
 use serde_json::{Value, json};
@@ -10,7 +15,7 @@ use crate::LlmConfig;
 
 /// Change this on any change to the prompt bytes or to the request parameters.
 /// It is part of every cache key, so old results become invalid.
-pub const PROMPT_VERSION: u32 = 2;
+pub const PROMPT_VERSION: u32 = 3;
 
 fn dialect_name(dialect: Dialect) -> &'static str {
     match dialect {
@@ -31,6 +36,7 @@ pub fn system_prompt(dialect: Dialect) -> String {
 
 You receive sentences as <s id="N">…</s>. Some may be correct.
 Fix only clear errors:
+- misspelled words
 - grammar and agreement (subject–verb, pronoun, tense consistency)
 - a wrong word that is still a real word (their/there, affect/effect)
 - missing, repeated or extra words
@@ -39,10 +45,10 @@ Fix only clear errors:
 Do not:
 - change a sentence that is already correct
 - change word choice, tone, style or dialect
-- fix spelling or capitalization (another tool handles those): leave them as they are, but still fix any other error in that sentence
 - touch placeholders like ⟦0⟧; keep each one exactly once, in order
 - add or remove negation, numbers, names or facts
 - change product names, proper nouns or technical terms
+- fix capitalization
 - add optional punctuation: commas after introductory words or phrases, commas around "however" or "on the other hand", hyphens, or dashes in place of hyphens
 - treat headings, list items, labels or short fragments as errors (don't add a final period or complete them)
 Return only the sentences you changed, each as the full corrected sentence, with a kind and a reason of at most 12 words. If nothing needs fixing, return an empty list.
