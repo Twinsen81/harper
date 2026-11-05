@@ -12,12 +12,6 @@ pub const VIEWPORT_MARGIN: f32 = 8.0;
 /// Space between the lint highlight and the list card.
 pub const ANCHOR_GAP: f32 = 3.0;
 
-/// A viewport with no edges, so the cards are never clamped, flipped, or stacked.
-///
-/// The highlighter does not yet know which monitor a popup is on. Until it does, both drawing and
-/// hit-testing use this value, so the later change only has to replace it in one place.
-pub const UNBOUNDED_VIEWPORT: egui::Rect = egui::Rect::EVERYTHING;
-
 /// The time constant, in seconds, of the sidebar's movement toward its target.
 ///
 /// After this time, the sidebar has moved about 63% of the distance. After three times this value,
@@ -129,6 +123,23 @@ pub fn popup_layout(
     }
 }
 
+/// Selects the viewport (one monitor's area, in global screen points) that shows `anchor`.
+///
+/// This is the viewport that contains the anchor's center. When no viewport contains it, this is
+/// the viewport nearest to the center, so a lint at a screen edge still gets a popup. Returns `None`
+/// only when there are no viewports.
+pub fn viewport_for_anchor(anchor: &Rect, viewports: &[egui::Rect]) -> Option<egui::Rect> {
+    let center = egui::pos2(
+        (anchor.x + anchor.width / 2.0) as f32,
+        (anchor.y + anchor.height / 2.0) as f32,
+    );
+
+    viewports.iter().copied().min_by(|a, b| {
+        a.distance_sq_to_pos(center)
+            .total_cmp(&b.distance_sq_to_pos(center))
+    })
+}
+
 /// Moves `current` toward `target` by an exponential lerp over `dt` seconds.
 ///
 /// The lerp factor is `1 - exp(-dt / SIDEBAR_SMOOTHING)`. Because two steps of `dt / 2` give the same
@@ -195,22 +206,6 @@ mod tests {
     }
 
     #[test]
-    fn unbounded_viewport_opens_right_below_anchor() {
-        let bounded = popup_layout(&anchor(), viewport(1000.0, 1000.0), LIST, FLYOUT, 30.0);
-        let unbounded = popup_layout(&anchor(), UNBOUNDED_VIEWPORT, LIST, FLYOUT, 30.0);
-
-        assert_eq!(bounded, unbounded);
-    }
-
-    #[test]
-    fn unbounded_viewport_does_not_clamp_far_anchors() {
-        let anchor = Rect::new(-5000.0, 90000.0, 30.0, 12.0);
-        let layout = popup_layout(&anchor, UNBOUNDED_VIEWPORT, LIST, FLYOUT, 0.0);
-
-        assert_eq!(layout.list.min, egui::pos2(-5000.0, 90012.0 + ANCHOR_GAP));
-    }
-
-    #[test]
     fn opens_left_near_right_edge() {
         let anchor = Rect::new(700.0, 40.0, 30.0, 12.0);
         let layout = popup_layout(&anchor, viewport(1000.0, 1000.0), LIST, FLYOUT, 0.0);
@@ -272,5 +267,108 @@ mod tests {
         assert!(layout.contains(layout.list.center()));
         assert!(layout.contains(layout.flyout.center()));
         assert!(!layout.contains(gap));
+    }
+
+    /// A MacBook display at the origin and a larger external display on its right, with the top
+    /// edges aligned, in global screen points.
+    fn two_monitors() -> [egui::Rect; 2] {
+        [
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1728.0, 1117.0)),
+            egui::Rect::from_min_size(egui::pos2(1728.0, 0.0), egui::vec2(2560.0, 1440.0)),
+        ]
+    }
+
+    #[test]
+    fn viewport_for_anchor_picks_monitor_with_anchor() {
+        let [built_in, external] = two_monitors();
+
+        assert_eq!(
+            viewport_for_anchor(&Rect::new(400.0, 1050.0, 60.0, 16.0), &two_monitors()),
+            Some(built_in)
+        );
+        assert_eq!(
+            viewport_for_anchor(&Rect::new(2000.0, 1300.0, 60.0, 16.0), &two_monitors()),
+            Some(external)
+        );
+    }
+
+    #[test]
+    fn viewport_for_anchor_supports_negative_origins() {
+        let built_in = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1728.0, 1117.0));
+        let left =
+            egui::Rect::from_min_size(egui::pos2(-2560.0, -400.0), egui::vec2(2560.0, 1440.0));
+        let above = egui::Rect::from_min_size(egui::pos2(0.0, -1440.0), egui::vec2(2560.0, 1440.0));
+        let viewports = [built_in, left, above];
+
+        assert_eq!(
+            viewport_for_anchor(&Rect::new(-300.0, -100.0, 60.0, 16.0), &viewports),
+            Some(left)
+        );
+        assert_eq!(
+            viewport_for_anchor(&Rect::new(300.0, -100.0, 60.0, 16.0), &viewports),
+            Some(above)
+        );
+        assert_eq!(
+            viewport_for_anchor(&Rect::new(300.0, 100.0, 60.0, 16.0), &viewports),
+            Some(built_in)
+        );
+    }
+
+    #[test]
+    fn viewport_for_anchor_uses_center_for_anchor_on_two_monitors() {
+        let [built_in, external] = two_monitors();
+
+        assert_eq!(
+            viewport_for_anchor(&Rect::new(1700.0, 100.0, 40.0, 16.0), &two_monitors()),
+            Some(built_in)
+        );
+        assert_eq!(
+            viewport_for_anchor(&Rect::new(1720.0, 100.0, 40.0, 16.0), &two_monitors()),
+            Some(external)
+        );
+    }
+
+    #[test]
+    fn viewport_for_anchor_falls_back_to_nearest_monitor() {
+        let [built_in, external] = two_monitors();
+
+        // Below the MacBook display, where the external display does not reach.
+        assert_eq!(
+            viewport_for_anchor(&Rect::new(400.0, 1200.0, 60.0, 16.0), &two_monitors()),
+            Some(built_in)
+        );
+        assert_eq!(
+            viewport_for_anchor(&Rect::new(5000.0, 100.0, 60.0, 16.0), &two_monitors()),
+            Some(external)
+        );
+    }
+
+    #[test]
+    fn viewport_for_anchor_without_monitors() {
+        assert_eq!(
+            viewport_for_anchor(&Rect::new(400.0, 100.0, 60.0, 16.0), &[]),
+            None
+        );
+    }
+
+    #[test]
+    fn popup_near_monitor_bottom_stays_inside_monitor() {
+        let [built_in, _] = two_monitors();
+        let anchor = Rect::new(400.0, 1050.0, 60.0, 16.0);
+        let layout = popup_layout(&anchor, built_in, LIST, FLYOUT, 0.0);
+
+        assert_eq!(layout.list.bottom(), 1050.0 - ANCHOR_GAP);
+        assert!(built_in.contains_rect(layout.list));
+        assert!(built_in.contains_rect(layout.flyout));
+    }
+
+    #[test]
+    fn popup_on_external_monitor_stays_inside_it() {
+        let [_, external] = two_monitors();
+        let anchor = Rect::new(4200.0, 1400.0, 60.0, 16.0);
+        let layout = popup_layout(&anchor, external, LIST, FLYOUT, 0.0);
+
+        assert!(external.contains_rect(layout.list));
+        assert!(external.contains_rect(layout.flyout));
     }
 }
